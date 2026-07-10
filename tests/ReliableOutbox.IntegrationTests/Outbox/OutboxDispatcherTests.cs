@@ -122,4 +122,115 @@ public sealed class OutboxDispatcherTests : IAsyncLifetime
         Assert.Equal(1, outboxMessage.AttemptCount);
         Assert.Null(outboxMessage.LastError);
     }
+
+    [Fact]
+    public async Task
+        CrashAfterScheduling_ThenRetry_SchedulesDuplicateWork()
+    {
+        var response = await _client.PostAsJsonAsync(
+            "/orders/outbox",
+            new
+            {
+                customerName = "Duplicate demonstration"
+            });
+
+        Assert.Equal(
+            HttpStatusCode.Created,
+            response.StatusCode);
+
+        var auditScheduler =
+            _factory.Services.GetRequiredService<
+                InMemoryAuditScheduler>();
+
+        await using (var firstScope =
+            _factory.Services.CreateAsyncScope())
+        {
+            var firstDbContext =
+                firstScope.ServiceProvider
+                    .GetRequiredService<
+                        ReliableOutboxDbContext>();
+
+            var firstDispatcher =
+                new OutboxDispatcher(
+                    firstDbContext,
+                    auditScheduler);
+
+            await Assert.ThrowsAsync<
+                SimulatedDispatchCrashException>(
+                () => firstDispatcher.DispatchPendingAsync(
+                    batchSize: 10,
+                    CancellationToken.None,
+                    simulateCrashAfterScheduling: true));
+        }
+
+        var firstScheduledItem =
+            Assert.Single(auditScheduler.ScheduledItems);
+
+        await using (var verificationScope =
+            _factory.Services.CreateAsyncScope())
+        {
+            var verificationDbContext =
+                verificationScope.ServiceProvider
+                    .GetRequiredService<
+                        ReliableOutboxDbContext>();
+
+            var pendingMessage =
+                await verificationDbContext
+                    .OutboxMessages
+                    .AsNoTracking()
+                    .SingleAsync();
+
+            Assert.Null(pendingMessage.ProcessedOnUtc);
+            Assert.Equal(0, pendingMessage.AttemptCount);
+        }
+
+        await using (var retryScope =
+            _factory.Services.CreateAsyncScope())
+        {
+            var retryDbContext =
+                retryScope.ServiceProvider
+                    .GetRequiredService<
+                        ReliableOutboxDbContext>();
+
+            var retryDispatcher =
+                new OutboxDispatcher(
+                    retryDbContext,
+                    auditScheduler);
+
+            var dispatchedCount =
+                await retryDispatcher.DispatchPendingAsync(
+                    batchSize: 10,
+                    CancellationToken.None);
+
+            Assert.Equal(1, dispatchedCount);
+        }
+
+        var scheduledItems =
+            auditScheduler.ScheduledItems.ToArray();
+
+        Assert.Equal(2, scheduledItems.Length);
+
+        Assert.Equal(
+            firstScheduledItem.Id,
+            scheduledItems[1].Id);
+
+        Assert.Equal(
+            firstScheduledItem.OrderId,
+            scheduledItems[1].OrderId);
+
+        await using var finalScope =
+            _factory.Services.CreateAsyncScope();
+
+        var finalDbContext =
+            finalScope.ServiceProvider.GetRequiredService<
+                ReliableOutboxDbContext>();
+
+        var processedMessage =
+            await finalDbContext.OutboxMessages
+                .AsNoTracking()
+                .SingleAsync();
+
+        Assert.NotNull(processedMessage.ProcessedOnUtc);
+        Assert.Equal(1, processedMessage.AttemptCount);
+    }
 }

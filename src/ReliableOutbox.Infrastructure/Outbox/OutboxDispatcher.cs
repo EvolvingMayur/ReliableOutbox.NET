@@ -11,7 +11,8 @@ public sealed class OutboxDispatcher(
 {
     public async Task<int> DispatchPendingAsync(
         int batchSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool simulateCrashAfterScheduling = false)
     {
         if (batchSize <= 0)
         {
@@ -48,9 +49,23 @@ public sealed class OutboxDispatcher(
                     workItem,
                     cancellationToken);
 
+                if (simulateCrashAfterScheduling)
+                {
+                    dbContext.ChangeTracker.Clear();
+
+                    throw new SimulatedDispatchCrashException();
+                }
+
                 message.MarkProcessed(DateTimeOffset.UtcNow);
 
+                await dbContext.SaveChangesAsync(
+                    cancellationToken);
+
                 successfulDispatchCount++;
+            }
+            catch (SimulatedDispatchCrashException)
+            {
+                throw;
             }
             catch (OperationCanceledException)
                 when (cancellationToken.IsCancellationRequested)
@@ -60,9 +75,10 @@ public sealed class OutboxDispatcher(
             catch (Exception exception)
             {
                 message.MarkFailed(exception.Message);
-            }
 
-            await dbContext.SaveChangesAsync(cancellationToken);
+                await dbContext.SaveChangesAsync(
+                    cancellationToken);
+            }
         }
 
         return successfulDispatchCount;
