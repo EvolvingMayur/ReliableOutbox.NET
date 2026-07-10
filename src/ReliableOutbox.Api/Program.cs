@@ -21,6 +21,7 @@ builder.Services.AddSingleton<IAuditScheduler>(
         serviceProvider.GetRequiredService<InMemoryAuditScheduler>());
 
 builder.Services.AddScoped<NaiveOrderService>();
+builder.Services.AddScoped<OutboxOrderService>();
 
 var app = builder.Build();
 
@@ -78,6 +79,53 @@ app.MapPost(
         }
     });
 
+app.MapPost(
+    "/orders/outbox",
+    async (
+        CreateOrderRequest request,
+        bool? simulateFailureBeforeCommit,
+        bool? simulateCrashAfterCommit,
+        OutboxOrderService orderService,
+        CancellationToken cancellationToken) =>
+    {
+        if (string.IsNullOrWhiteSpace(request.CustomerName))
+        {
+            return Results.ValidationProblem(
+                new Dictionary<string, string[]>
+                {
+                    [nameof(request.CustomerName)] =
+                        ["Customer name is required."]
+                });
+        }
+
+        try
+        {
+            var order = await orderService.CreateAsync(
+                request.CustomerName,
+                simulateFailureBeforeCommit ?? false,
+                simulateCrashAfterCommit ?? false,
+                cancellationToken);
+
+            return Results.Created(
+                $"/orders/{order.Id}",
+                new
+                {
+                    order.Id,
+                    order.TransactionId,
+                    order.CustomerName,
+                    order.CreatedOnUtc
+                });
+        }
+        catch (SimulatedOutboxFailureException exception)
+        {
+            return Results.Problem(
+                title: "Simulated process failure",
+                detail: exception.Message,
+                statusCode:
+                    StatusCodes.Status500InternalServerError);
+        }
+    });
+
 app.MapGet(
     "/orders",
     async (
@@ -96,6 +144,20 @@ app.MapGet(
     "/audit-work-items",
     (InMemoryAuditScheduler scheduler) =>
         Results.Ok(scheduler.ScheduledItems));
+
+app.MapGet(
+    "/outbox-messages",
+    async (
+        ReliableOutboxDbContext dbContext,
+        CancellationToken cancellationToken) =>
+    {
+        var messages = await dbContext.OutboxMessages
+            .AsNoTracking()
+            .OrderBy(message => message.OccurredOnUtc)
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(messages);
+    });
 
 app.Run();
 
