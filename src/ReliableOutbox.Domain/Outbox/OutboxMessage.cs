@@ -38,4 +38,19 @@ public sealed class OutboxMessage
     public int AttemptCount { get; private set; }
 
     public string? LastError { get; private set; }
+
+    public void MarkProcessed(DateTimeOffset processedOnUtc)
+    {
+        AttemptCount++;
+        ProcessedOnUtc = processedOnUtc;
+        LastError = null;
+    }
+
+    public void MarkFailed(string error)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(error);
+
+        AttemptCount++;
+        LastError = error;
+    }
 }
