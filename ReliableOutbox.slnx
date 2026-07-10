@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ReliableOutbox.Api/ReliableOutbox.Api.csproj" />
+    <Project Path="src/ReliableOutbox.Domain/ReliableOutbox.Domain.csproj" />
+    <Project Path="src/ReliableOutbox.Infrastructure/ReliableOutbox.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ReliableOutbox.IntegrationTests/ReliableOutbox.IntegrationTests.csproj" />
+  </Folder>
+</Solution>
